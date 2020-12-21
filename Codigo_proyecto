@@ -1,0 +1,873 @@
+require(openxlsx)
+library(rpart)
+require(data.table)
+require(dplyr)
+library(stringr)
+library(ggplot2)
+library(purrr)
+require(factoextra)
+require(cluster)
+library(arm)
+library(corrplot)
+library(caret)
+library(rpart.plot)
+library(randomForest)
+library(tidyverse)
+library(egg)
+library(ggpubr)
+library(ranger)
+require(pROC)
+require(ROSE)
+require(foreach)
+
+
+# ****************************************************** CARGA DE LAS BASES DE DATOS ****************************************************************************
+#*** Covid
+covid<-data.table(read.csv("C://Users//DELL//Desktop//201119COVID19MEXICO.csv"))
+
+#*** Catálogos
+cat_orig<-data.table(read.xlsx("C://Users//DELL//Desktop//Catalogos_071020.xlsx",sheet = "Catálogo ORIGEN"))
+cat_secto<-data.table(read.xlsx("C://Users//DELL//Desktop//Catalogos_071020.xlsx",sheet = "Catálogo SECTOR"))
+cat_sexo<-data.table(read.xlsx("C://Users//DELL//Desktop//Catalogos_071020.xlsx",sheet = "Catálogo SEXO"))
+cat_tipo_pac<-data.table(read.xlsx("C://Users//DELL//Desktop//Catalogos_071020.xlsx",sheet = "Catálogo TIPO_PACIENTE"))
+cat_si_no<-data.table(read.xlsx("C://Users//DELL//Desktop//Catalogos_071020.xlsx",sheet = "Catálogo SI_NO"))
+cat_nacion<-data.table(read.xlsx("C://Users//DELL//Desktop//Catalogos_071020.xlsx",sheet = "Catálogo NACIONALIDAD"))
+cat_resultado<-data.table(read.xlsx("C://Users//DELL//Desktop//Catalogos_071020.xlsx",sheet = "Catálogo RESULTADO_LAB"))
+cat_clasif<-data.table(read.xlsx("C://Users//DELL//Desktop//Catalogos_071020.xlsx",sheet = "Catálogo CLASIFICACION_FINAL"))
+cat_entid<-data.table(read.xlsx("C://Users//DELL//Desktop//Catalogos_071020.xlsx",sheet = "Catálogo de ENTIDADES"))
+cat_munic<-data.table(read.xlsx("C://Users//DELL//Desktop//Catalogos_071020.xlsx",sheet = "Catálogo MUNICIPIOS"))
+
+#*** Renombrar las variables de todos los catálogos para trabajar más facilmente
+names<-c("CLAVE","DESCRIPCION")
+names(cat_orig)<-names
+names(cat_secto)<-names
+names(cat_sexo)<-names
+names(cat_tipo_pac)<-names
+names(cat_si_no)<-names
+names(cat_nacion)<-names
+names(cat_resultado)<-names
+
+cat_clasif[,DESCRIPCIÓN:=NULL]
+names(cat_clasif)<-names
+
+cat_entid[,ABREVIATURA:=NULL]
+names(cat_entid)<-names
+
+cat_munic[,CLAVE_ENTIDAD:=NULL]
+names(cat_munic)<-names
+
+
+#*** Unión de los catálogos con la base
+# Variable origen
+#USMER (Unidades de Salud Monitoras de Enfermedades Respiratorias):= incluyen unidades médicas del primer mundo o tercer nivel de atención  que cuentan con 
+#       especialidades epidemiológicas, neumología, infectología o pediatra
+setkey(covid,ORIGEN)
+setkey(cat_orig,CLAVE)
+covid[cat_orig,origen:=DESCRIPCION]
+covid[,.N,origen]
+
+# Variable sector
+# Institución donde se brindó la atención médica
+setkey(covid,SECTOR)
+setkey(cat_secto,CLAVE)
+covid[cat_secto,sector:=DESCRIPCION]
+covid[,.N,sector]
+
+# Variable Entidad_UM
+# Entidad donde se ubica la Unidad Médica donde se brindó la atención
+
+covid[,ENTIDAD_UM:=str_pad(ENTIDAD_UM,2,side="left",pad="0")]
+
+setkey(covid,ENTIDAD_UM)
+setkey(cat_entid,CLAVE)
+covid[cat_entid,entid_um:=DESCRIPCION]
+covid[,.N,entid_um]
+
+# Variable Sexo
+setkey(covid,SEXO)
+setkey(cat_sexo,CLAVE)
+covid[,.N,ENTIDAD_UM]
+covid[cat_sexo,sexo:=DESCRIPCION]
+covid[,.N,sexo]
+
+# Variable Entidad_NAC
+# Entidad de nacimiento del paciente
+covid[,ENTIDAD_NAC:=str_pad(ENTIDAD_NAC,2,side="left",pad="0")]
+
+setkey(covid,ENTIDAD_NAC)
+setkey(cat_entid,CLAVE)
+covid[cat_entid,entid_nac:=DESCRIPCION]
+covid[,.N,entid_nac]
+
+# Variable Entidad_RES
+# Entidad de residencia del paciente
+covid[,ENTIDAD_RES:=str_pad(ENTIDAD_RES,2,side="left",pad="0")]
+
+setkey(covid,ENTIDAD_RES)
+setkey(cat_entid,CLAVE)
+covid[cat_entid,entid_res:=DESCRIPCION]
+covid[,.N,entid_res]
+
+# Variable Tipo_pac
+# Tipo de atención que recibió el paciente
+setkey(covid,TIPO_PACIENTE)
+setkey(cat_tipo_pac,CLAVE)
+covid[cat_tipo_pac,tipo_pacien:=DESCRIPCION]
+covid[,.N,tipo_pacien]
+
+# Variable Intubado
+setkey(covid,INTUBADO)
+setkey(cat_si_no,CLAVE)
+covid[cat_si_no,entubado:=DESCRIPCION]
+covid[,.N,entubado]
+
+# Variable Neumonía
+setkey(covid,NEUMONIA)
+setkey(cat_si_no,CLAVE)
+covid[cat_si_no,neumonia:=DESCRIPCION]
+covid[,.N,neumonia]
+
+# Variable Nacionalidad
+setkey(covid,NACIONALIDAD)
+setkey(cat_nacion,CLAVE)
+covid[cat_nacion,nacionalidad:=DESCRIPCION]
+covid[,.N,nacionalidad]
+
+# Variable Embarazo
+setkey(covid,EMBARAZO)
+setkey(cat_si_no,CLAVE)
+covid[cat_si_no,embarazo:=DESCRIPCION]
+covid[,.N,embarazo]
+
+# Variable Habla_Lengua_indig
+setkey(covid,HABLA_LENGUA_INDIG)
+setkey(cat_si_no,CLAVE)
+covid[cat_si_no,lengua_indig:=DESCRIPCION]
+covid[,.N,lengua_indig]
+
+# Variable Indigena
+setkey(covid,INDIGENA)
+setkey(cat_si_no,CLAVE)
+covid[cat_si_no,indigena:=DESCRIPCION]
+covid[,.N,indigena]
+
+# Variable Diabetes
+setkey(covid,DIABETES)
+setkey(cat_si_no,CLAVE)
+covid[cat_si_no,diabetes:=DESCRIPCION]
+covid[,.N,diabetes]
+
+# Variable EPOC (Enfermedad pulmonar obstructiva crónica)
+setkey(covid,EPOC)
+setkey(cat_si_no,CLAVE)
+covid[cat_si_no,epoc:=DESCRIPCION]
+covid[,.N,epoc]
+
+# Variable Asma
+setkey(covid,ASMA)
+setkey(cat_si_no,CLAVE)
+covid[cat_si_no,asma:=DESCRIPCION]
+covid[,.N,asma]
+
+# Variable INMUNOSUPR
+setkey(covid,INMUSUPR)
+setkey(cat_si_no,CLAVE)
+covid[cat_si_no,inmunosupr:=DESCRIPCION]
+covid[,.N,inmunosupr]
+
+# Variable Hipertensión
+setkey(covid,HIPERTENSION)
+setkey(cat_si_no,CLAVE)
+covid[cat_si_no,hiperten:=DESCRIPCION]
+covid[,.N,hiperten]
+
+# Variable Otras_Comp
+setkey(covid,OTRA_COM)
+setkey(cat_si_no,CLAVE)
+covid[cat_si_no,otras_com:=DESCRIPCION]
+covid[,.N,otras_com]
+
+# Variable cardiovascular
+setkey(covid,CARDIOVASCULAR)
+setkey(cat_si_no,CLAVE)
+covid[cat_si_no,cardiovascular:=DESCRIPCION]
+covid[,.N,cardiovascular]
+
+# Variable Obesidad
+setkey(covid,OBESIDAD)
+setkey(cat_si_no,CLAVE)
+covid[cat_si_no,obesidad:=DESCRIPCION]
+covid[,.N,obesidad]
+
+# Variable Obesidad
+setkey(covid,RENAL_CRONICA)
+setkey(cat_si_no,CLAVE)
+covid[cat_si_no,renal_cron:=DESCRIPCION]
+covid[,.N,renal_cron]
+
+# Variable Tabaquismo
+setkey(covid,TABAQUISMO)
+setkey(cat_si_no,CLAVE)
+covid[cat_si_no,tabaquismo:=DESCRIPCION]
+covid[,.N,tabaquismo]
+
+# Variable Otro_caso (contacto con otro caso de covid)
+setkey(covid,OTRO_CASO)
+setkey(cat_si_no,CLAVE)
+covid[cat_si_no,otro_caso:=DESCRIPCION]
+covid[,.N,otro_caso]
+
+# Variable Toma_muestra (Se identifica si al paciente se le tomó muestra)
+setkey(covid,TOMA_MUESTRA)
+setkey(cat_si_no,CLAVE)
+covid[cat_si_no,toma_muestra:=DESCRIPCION]
+covid[,.N,toma_muestra]
+
+# Variable Resultado Lab
+setkey(covid,RESULTADO_LAB)
+setkey(cat_resultado,CLAVE)
+covid[cat_resultado,resul_lab:=DESCRIPCION]
+covid[,.N,resul_lab]
+
+# Variable Clasificacion_final (Identifica si el paciente es caso covid)
+setkey(covid,CLASIFICACION_FINAL)
+setkey(cat_clasif,CLAVE)
+covid[cat_clasif,clasif_final:=DESCRIPCION]
+covid[,.N,clasif_final]
+
+# Variable Migrante
+setkey(covid,MIGRANTE)
+setkey(cat_si_no,CLAVE)
+covid[cat_si_no,migrante:=DESCRIPCION]
+covid[,.N,migrante]
+
+# Variable UCI(unidades de cuidados intensivos)
+setkey(covid,UCI)
+setkey(cat_si_no,CLAVE)
+covid[cat_si_no,uci:=DESCRIPCION]
+covid[,.N,uci]
+
+
+# ************************************************ EXPLORACIÓN DE DATOS y TRANSFORMACIÓN DE LOS DATOS   *************************************************
+
+#*** Revisión de los catalogos
+cat_orig
+cat_secto
+cat_sexo
+cat_tipo_pac
+cat_si_no
+cat_nacion
+cat_resultado
+cat_clasif
+cat_entid
+cat_munic
+
+#*** Gráficas de cada variable
+hist(covid$ORIGEN, col="olivedrab3")
+hist(covid$SECTOR, col="olivedrab3")
+hist(as.numeric(covid$ENTIDAD_UM), col="olivedrab3")
+hist(covid$SEXO, col="olivedrab3")
+hist(as.numeric(covid$ENTIDAD_NAC), col="olivedrab3")
+hist(as.numeric(covid$ENTIDAD_RES), col="olivedrab3")
+hist(covid$MUNICIPIO_RES, col="olivedrab3")
+hist(covid$TIPO_PACIENTE, col="olivedrab3")
+hist(covid$INTUBADO, col="olivedrab3")
+hist(covid$NEUMONIA, col="olivedrab3")
+hist(covid$EDAD, col="olivedrab3")
+hist(covid$NACIONALIDAD, col="olivedrab3")
+hist(covid$EMBARAZO, col="olivedrab3")
+hist(covid$HABLA_LENGUA_INDIG, col="olivedrab3")
+hist(covid$INDIGENA, col="olivedrab3")
+hist(covid$DIABETES, col="olivedrab3")
+hist(covid$EPOC, col="olivedrab3")
+hist(covid$ASMA, col="olivedrab3")
+hist(covid$INMUSUPR, col="olivedrab3")
+hist(covid$HIPERTENSION, col="olivedrab3")
+hist(covid$OTRA_COM, col="olivedrab3")
+hist(covid$CARDIOVASCULAR, col="olivedrab3")
+hist(covid$OBESIDAD, col="olivedrab3")
+hist(covid$RENAL_CRONICA, col="olivedrab3")
+hist(covid$TABAQUISMO, col="olivedrab3")
+hist(covid$OTRO_CASO, col="olivedrab3")
+hist(covid$TOMA_MUESTRA, col="olivedrab3")
+hist(covid$RESULTADO_LAB, col="olivedrab3")
+hist(covid$CLASIFICACION_FINAL, col="olivedrab3")
+hist(covid$MIGRANTE, col="olivedrab3")
+hist(covid$UCI, col="olivedrab3")
+
+#***** Variables a eliminar ya que no cuentan con la información suficiente para ser consideradas en el modelo
+#Intubado
+#UCI
+#Migrante
+#Embarazo
+#Toma de muestra
+#Entidades (nacimiento y residencia del paciente)
+#Origen
+#Municipio
+#Habla lengua indígena
+#Pertenece a una comunidad indígena
+#Clasificación final
+
+covid[,c("FECHA_ACTUALIZACION","PAIS_ORIGEN","HABLA_LENGUA_INDIG","CLASIFICACION_FINAL","PAIS_NACIONALIDAD","ENTIDAD_NAC",
+         "ENTIDAD_RES","INDIGENA","MUNICIPIO_RES","MIGRANTE","TOMA_MUESTRA","NACIONALIDAD","EMBARAZO","INTUBADO","UCI","ORIGEN",
+         "origen","lengua_indig","indigena","clasif_final","nacionalidad","entid_nac","entid_res","migrante","toma_muestra",
+         "embarazo","entubado","uci"):=NULL]
+
+
+summary(covid)
+
+#*** Se crea una copia de la base de Covid
+covid_2<-covid[]
+
+#*** Se eliminaran las edades mayores a 101 años
+covid_2<-covid_2[EDAD<=101]
+covid_2<-covid_2[SECTOR<90 & NEUMONIA<90 & DIABETES<90 & EPOC<90 & ASMA<90 & INMUSUPR<90 & HIPERTENSION<90 & OTRA_COM<90 & CARDIOVASCULAR<90 &
+                   OBESIDAD<90 & RENAL_CRONICA<90 & TABAQUISMO<90 & OTRO_CASO<90 & RESULTADO_LAB==1]
+
+# ******  Gráficas *******
+# Edad General con identificación de edad media
+ggplot(covid_2,aes(x=EDAD))+
+  geom_histogram(color="gold4", fill="gold2")+
+  geom_vline(aes(xintercept=mean(EDAD)),color="blue", linetype="dashed", size=1)+
+  labs(title = "Gráfico distribución de edad")
+
+# Distribución de edades de acuerdo a la variable Neumonía
+ggplot(covid_2,aes(x=EDAD,color=neumonia))+
+  geom_histogram(fill="white")+
+  labs(title = "Distribución por edad")
+
+
+# Distribución de edades de acuerdo a la variable Diabetes
+ggplot(covid_2,aes(x=EDAD,color=diabetes))+
+  geom_histogram(fill="white")+
+  labs(title = "Distribución por edad")
+
+# Distribución de edades de acuerdo a la variable EPOC
+ggplot(covid_2,aes(x=EDAD,color=epoc))+
+  geom_histogram(fill="white")+
+  labs(title = "Distribución por edad")
+
+# Distribución de edades de acuerdo a la variable Asma
+ggplot(covid_2,aes(x=EDAD,color=asma))+
+  geom_histogram(fill="white")+
+  labs(title = "Distribución por edad")
+
+# Distribución de edades de acuerdo a la variable Inmunosupr
+ggplot(covid_2,aes(x=EDAD,color=inmunosupr))+
+  geom_histogram(fill="white")+
+  labs(title = "Distribución por edad")
+
+# Distribución de edades de acuerdo a la variable Hipertension
+ggplot(covid_2,aes(x=EDAD,color=hiperten))+
+  geom_histogram(fill="white")+
+  labs(title = "Distribución por edad")
+
+# Distribución de edades de acuerdo a la variable Otra_complicacion
+ggplot(covid_2,aes(x=EDAD,color=otras_com))+
+  geom_histogram(fill="white")+
+  labs(title = "Distribución por edad")
+
+# Distribución de edades de acuerdo a la variable Cardiovascular
+ggplot(covid_2,aes(x=EDAD,color=cardiovascular))+
+  geom_histogram(fill="white")+
+  labs(title = "Distribución por edad")
+
+# Distribución de edades de acuerdo a la variable Obesidad
+ggplot(covid_2,aes(x=EDAD,color=obesidad))+
+  geom_histogram(fill="white")+
+  labs(title = "Distribución por edad")
+
+# Distribución de edades de acuerdo a la variable renal_cronica
+ggplot(covid_2,aes(x=EDAD,color=renal_cronic))+
+  geom_histogram(fill="white")+
+  labs(title = "Distribución por edad")
+
+# Distribución de edades de acuerdo a la variable tabaquismo
+ggplot(covid_2,aes(x=EDAD,color=tabaquismo))+
+  geom_histogram(fill="white")+
+  labs(title = "Distribución por edad")
+
+
+#*** Creación de la variable Muerte
+covid_2[,.N,FECHA_DEF]
+covid_2[FECHA_DEF=="9999-99-99",Muerte:=0]
+covid_2[is.na(Muerte),Muerte:=1]
+
+#*** Se crea variable de Días con sintomas 
+covid_2[FECHA_DEF=="9999-99-99",FECHA_DEF:="2070-01-01"]
+covid_2$FECHA_DEF<-as.Date(covid_2$FECHA_DEF)
+covid_2$FECHA_INGRESO<-as.Date(covid_2$FECHA_INGRESO)
+covid_2$FECHA_SINTOMAS<-as.Date(covid_2$FECHA_SINTOMAS)
+
+covid_2[,D_SINTOMAS:=abs(FECHA_SINTOMAS-FECHA_INGRESO)]
+covid_2[,D_SINTOMAS:=as.integer(substr(D_SINTOMAS,1,3))]
+covid_2[,c("FECHA_INGRESO","FECHA_SINTOMAS","FECHA_DEF"):=NULL]
+
+
+#*** Revisamos si hay N/A´s
+any(!complete.cases(covid_2))
+
+#*** Número de datos ausentes por variables
+map_dbl(covid_2,.f=function(x){any(!is.na(x) & x=="")})
+
+
+#*** Descripción de variables
+summary(covid_2)
+
+#*** Diagramas de caja de las variables
+boxplot(covid_2$SECTOR,col = "powderblue",main="Sector de atención")
+boxplot(as.numeric(covid_2$ENTIDAD_UM),col="powderblue",main="Entidad Unidad Médica")
+boxplot(covid_2$SEXO,col="powderblue",main="sexo")
+boxplot(covid_2$TIPO_PACIENTE,col="powderblue",main="Tipo de Paciente")
+boxplot(covid_2$NEUMONIA,col="powderblue",main="Neumonía")
+boxplot(covid_2$EDAD,col="powderblue",main="EDAD")
+boxplot(covid_2$DIABETES,col="powderblue",main="Diabetes")
+boxplot(covid_2$EPOC,col="powderblue",main="EPOC")
+boxplot(covid_2$ASMA,col="powderblue",main="Asma")
+boxplot(covid_2$INMUSUPR,col="powderblue",main="Inmunosupresor")
+boxplot(covid_2$HIPERTENSION,col="powderblue",main="Hipertesión")
+boxplot(covid_2$OTRA_COM,col="powderblue",main="Otras complicaciones")
+boxplot(covid_2$CARDIOVASCULAR,col="powderblue",main="Enfermedad Cardiovascular")
+boxplot(covid_2$OBESIDAD,col="powderblue",main="Obesidad")
+boxplot(covid_2$RENAL_CRONICA,col="powderblue",main="Enfermedad Renal Crónica")
+boxplot(covid_2$TABAQUISMO,col="powderblue",main="Tabaquismo")
+boxplot(covid_2$OTRO_CASO,col="powderblue",main="Contacto con otro caso Covid")
+boxplot(covid_2$Muerte,col="powderblue",main="Muerte")
+boxplot(covid_2$D_SINTOMAS,col="powderblue",main="Días con síntomas")
+
+names(covid_2)
+
+#*** Dias con los sintomas relacionados con la variable Muerte
+dcast.data.table(covid_2,D_SINTOMAS~Muerte,fun.aggregate=length,value.var="ID_REGISTRO")
+
+#*** Resumen de la Variable Muerte
+covid_2[,.N,Muerte]
+
+#*** Matriz de correlación
+covid_2[,ENTIDAD_UM:=as.numeric(ENTIDAD_UM)]
+covid_2num<-covid_2[,c(2:17,37,38)]
+str(covid_2num)
+correlacion<-round(cor(covid_2num),1)
+corrplot(correlacion,method="number",type="upper")
+
+
+#**************************************************************** CLUSTERS **********************************************************************************************
+
+#*** Dado que las variables Entidad, Edad tienen muchos "niveles" se propone hacer un clúster para cada variable
+
+#*******EDAD
+aux_edad<-covid_2[Muerte==1,.N,EDAD]
+names(aux_edad)=c("EDAD","Muertes")
+setDF(aux_edad)
+
+aux_edad2<-`row.names<-`(aux_edad,aux_edad$EDAD)
+aux_edad2$EDAD<-NULL
+
+aux_edad3<-scale(aux_edad2)
+
+cluster_jerar<-hclust(d=dist(aux_edad3,method="euclidian"),"complete")
+plot(cluster_jerar)
+
+# Grafica ensayo error, sin óptimo
+fviz_dend(cluster_jerar,k=4,cex = 0.7)+
+  geom_hline(yintercept = 1.05,linetype="dashed")+
+  labs(title = "Herical Clustering", subtitle = "Euclidean distance")
+
+# K-means, para saber cuantos clúster considera óptimos
+cluster_k<-hkmeans(aux_edad3,k=4,hc.metric = "euclidean",hc.method = "complete",iter.max = 100)
+fviz_nbclust(aux_edad3,FUNcluster = kmeans,method = "wss",dist(aux_edad3,method = "euclidean"),k.max = 7)
+
+
+edad_agru<-list(cluster_k$cluster)
+setwd("C://Users//DELL//Desktop")
+write.csv(edad_agru,"vector edad.csv")
+vector_edad<-data.table(read.csv("vector edad.csv"))
+
+colnames(vector_edad)<-c("EDAD","GRUPO")
+
+setkey(vector_edad,EDAD)
+setkey(covid_2,EDAD)
+covid_2[vector_edad,CLUST_EDAD:=GRUPO]
+covid_2[is.na(CLUST_EDAD)]
+covid_2[,EDAD:=NULL]
+
+
+#******* ENTIDAD
+aux_ent<-covid_2[Muerte==1,.N,entid_um]
+names(aux_ent)=c("ENTIDAD","Muertes")
+setDF(aux_ent)
+
+aux_ent2<-`row.names<-`(aux_ent,aux_ent$ENTIDAD)
+aux_ent2$ENTIDAD<-NULL
+
+aux_ent3<-scale(aux_ent2)
+
+cluster_jerar<-hclust(d=dist(aux_ent3,method="euclidian"),"complete")
+plot(cluster_jerar)
+
+# Grafica ensayo error, sin óptimo
+fviz_dend(cluster_jerar,k=3,cex = 0.7)+
+  geom_hline(yintercept = 1.2,linetype="dashed")+
+  labs(title = "Herical Clustering", subtitle = "Euclidean distance")
+
+# K-means, para saber cuantos clúster considera óptimos
+cluster_k<-hkmeans(aux_ent3,k=4,hc.metric = "euclidean",hc.method = "complete",iter.max = 100)
+fviz_nbclust(aux_ent3,FUNcluster = kmeans,method = "wss",dist(aux_ent3,method = "euclidean"),k.max = 7)
+
+entid_agru<-list(cluster_k$cluster)
+write.csv(entid_agru,"vector entidad.csv")
+vector_entid<-data.table(read.csv("vector entidad.csv"))
+
+names(vector_entid)=c("ENTIDAD","GRUPO")
+setkey(vector_entid,ENTIDAD)
+setkey(covid_2,entid_um)
+covid_2[vector_entid,CLUST_ENTID:=GRUPO]
+covid_2[is.na(CLUST_ENTID)]
+covid_2[,entid_um:=NULL]
+
+
+#******* DIAS SINTOMAS
+aux_dsin<-covid_2[Muerte==1,.N,D_SINTOMAS]
+names(aux_dsin)=c("D_SINTOMAS","Muertes")
+setDF(aux_dsin)
+
+aux_dsin2<-`row.names<-`(aux_dsin,aux_dsin$D_SINTOMAS)
+aux_dsin2$D_SINTOMAS<-NULL
+
+aux_dsin3<-scale(aux_dsin2)
+
+cluster_jerar<-hclust(d=dist(aux_dsin3,method="euclidian"),"complete")
+plot(cluster_jerar)
+
+# Grafica ensayo error, sin óptimo
+fviz_dend(cluster_jerar,k=3,cex = 0.7)+
+  geom_hline(yintercept = 1.3,linetype="dashed")+
+  labs(title = "Herical Clustering", subtitle = "Euclidean distance")
+
+# K-means, para saber cuantos clúster considera óptimos
+cluster_k<-hkmeans(aux_dsin3,k=3,hc.metric = "euclidean",hc.method = "complete",iter.max = 100)
+fviz_nbclust(aux_dsin3,FUNcluster = kmeans,method = "wss",dist(aux_dsin3,method = "euclidean"),k.max = 7)
+
+dias_agru<-list(cluster_k$cluster)
+write.csv(dias_agru,"vector dias.csv")
+vector_dias<-data.table(read.csv("vector dias.csv"))
+
+names(vector_dias)=c("D_SINTOMAS","GRUPO")
+
+setkey(vector_dias,D_SINTOMAS)
+setkey(covid_2,D_SINTOMAS)
+covid_2[vector_dias,CLUST_DIAS:=GRUPO]
+covid_2[is.na(CLUST_DIAS),.N,D_SINTOMAS]
+covid_2[,D_SINTOMAS:=NULL]
+
+
+
+#** Checando matriz de correlación con las nuevas variables
+covid_2[,ENTIDAD_UM:=as.numeric(ENTIDAD_UM)]
+covid_2_2num<-covid_2[,c(2,4:17,35:38)]
+correlacion<-round(cor(covid_2_2num),1)
+corrplot(correlacion,method="number",type="upper")
+
+#*** TEST
+#* Convierto las variables a factor para introducirlas al modelo
+
+names(covid_2_2num)
+covid_2_2num$SECTOR<-as.factor(covid_2_2num$SECTOR)
+covid_2_2num$SEXO<-as.factor(covid_2_2num$SEXO)
+covid_2_2num$TIPO_PACIENTE<-as.factor(covid_2_2num$TIPO_PACIENTE)
+covid_2_2num$NEUMONIA<-as.factor(covid_2_2num$NEUMONIA)
+covid_2_2num$DIABETES<-as.factor(covid_2_2num$DIABETES)
+covid_2_2num$EPOC<-as.factor(covid_2_2num$EPOC)
+covid_2_2num$ASMA<-as.factor(covid_2_2num$ASMA)
+covid_2_2num$INMUSUPR<-as.factor(covid_2_2num$INMUSUPR)
+covid_2_2num$HIPERTENSION<-as.factor(covid_2_2num$HIPERTENSION)
+covid_2_2num$OTRA_COM<-as.factor(covid_2_2num$OTRA_COM)
+covid_2_2num$CARDIOVASCULAR<-as.factor(covid_2_2num$CARDIOVASCULAR)
+covid_2_2num$OBESIDAD<-as.factor(covid_2_2num$OBESIDAD)
+covid_2_2num$RENAL_CRONICA<-as.factor(covid_2_2num$RENAL_CRONICA)
+covid_2_2num$TABAQUISMO<-as.factor(covid_2_2num$TABAQUISMO)
+covid_2_2num$OTRO_CASO<-as.factor(covid_2_2num$OTRO_CASO)
+covid_2_2num$Muerte<-as.factor(covid_2_2num$Muerte)
+covid_2_2num$CLUST_EDAD<-as.factor(covid_2_2num$CLUST_EDAD)
+covid_2_2num$CLUST_ENTID<-as.factor(covid_2_2num$CLUST_ENTID)
+covid_2_2num$CLUST_DIAS<-as.factor(covid_2_2num$CLUST_DIAS)
+
+#*** Se creará un muestreo de la base de datos ya que tiene demasiados datos
+covid_sample<-sample_n(covid_2_2num,30000)# los 30000 dependerá del RAM 
+
+# Random
+set.seed(1)
+random<-map_if(.x=covid_sample,.p=is.character,.f=as.factor)%>%as.data.frame()
+
+modelorandom<-randomForest(Muerte~.,data=random,mtry=5,importance=TRUE,ntree=1000)# Obtener de aqui la matriz de confusión
+modelorandom
+
+importancia<-as.data.frame(modelorandom$importance)
+importancia <- rownames_to_column(importancia,var = "variable")
+
+p1 <- ggplot(data = importancia, aes(x = reorder(variable, MeanDecreaseAccuracy),
+                                     y = MeanDecreaseAccuracy,
+                                     fill = MeanDecreaseAccuracy)) +
+  labs(x = "variable", title = "Accuracy") +
+  geom_col() +
+  coord_flip() +
+  theme_bw() +
+  theme(legend.position = "bottom",text=element_text(size=18))
+
+p2 <- ggplot(data = importancia, aes(x = reorder(variable, MeanDecreaseGini),
+                                     y = MeanDecreaseGini,
+                                     fill = MeanDecreaseGini)) +
+  labs(x = "variable", title = "pureza (Gini)") +
+  geom_col() +
+  coord_flip() +
+  theme_bw() +
+  theme(legend.position = "bottom",text=element_text(size=18))
+
+ggarrange(p1, p2)# este sirve como validación y de aqui se obtienen las variables a considerar
+
+
+#************************************************** BALANCEO DE LOS DATOS ***********************************************
+
+covid_balanceado<-ROSE(Muerte~.,data=covid_sample,seed = 15)$data
+table(covid_balanceado$Muerte)
+
+#************************************************** CONJUNTO DE PRUEBA Y DE ENTRENAMIENTO **********************************************************************
+
+set.seed(55)
+division<-createDataPartition(y=covid_balanceado$Muerte,p=.70,list=FALSE)
+conj_entrenamiento<-covid_balanceado[division,]
+conj_prueba<-covid_balanceado[-division,]
+
+
+
+# ********* VALIDACIÓN CRUZADA *************
+particiones<-10 #el conjunto de entrenamiento será repartido en este número (columnas)
+repeticiones<-3 #filas
+
+#*** Hiperparámetros del los árboles
+hiperparametros <- expand.grid(trials = c(1, (1:10)*10),
+                               model = c("tree", "rules"),
+                               winnow = c(TRUE, FALSE))
+set.seed(123) 
+seeds <- vector(mode = "list", length = (particiones * repeticiones) + 1) 
+for (i in 1:(particiones * repeticiones)) { 
+  seeds[[i]] <- sample.int(1000, nrow(hiperparametros)) 
+} 
+seeds[[(particiones * repeticiones) + 1]] <- sample.int(1000, 1)
+
+#*** Ajuste del modelo
+
+control_train <- trainControl(method = "repeatedcv", number = particiones,
+                              repeats = repeticiones, seeds = seeds, 
+                              returnResamp = "final", verboseIter = FALSE,
+                              allowParallel = TRUE)
+
+set.seed(342) 
+modelo_C50Tree <- train(Muerte~NEUMONIA+TIPO_PACIENTE+SECTOR+CLUST_EDAD+CLUST_ENTID+DIABETES+HIPERTENSION+CLUST_DIAS, 
+                        data = conj_entrenamiento, 
+                        method = "C5.0", 
+                        tuneGrid = hiperparametros, 
+                        metric = "Accuracy", 
+                        trControl = control_train)
+modelo_C50Tree
+summary(modelo_C50Tree$finalModel)
+plot(modelo_C50Tree)
+
+
+
+
+
+#********************** REGRESION LOGISTICA *************************************
+hiperparametros <- data.frame(parameter = "none")# El modelo no necesita, por eso se pone "none"
+
+set.seed(123) 
+
+seeds <- vector(mode = "list", length = (particiones * repeticiones) + 1) 
+
+for (i in 1:(particiones * repeticiones)) { 
+  seeds[[i]] <- sample.int(1000, nrow(hiperparametros))
+} 
+
+seeds[[(particiones * repeticiones) + 1]] <- sample.int(1000, 1)
+
+#Definición del entrenamiento
+control_train <- trainControl(method = "repeatedcv", number = particiones, 
+                              repeats = repeticiones, seeds = seeds, 
+                              returnResamp = "final", verboseIter = FALSE, 
+                              allowParallel=TRUE) 
+
+#Ajuste del modelo
+set.seed(342)
+
+modelo_logistic <- train(Muerte~NEUMONIA+TIPO_PACIENTE+SECTOR+CLUST_EDAD+CLUST_ENTID+DIABETES+HIPERTENSION+CLUST_DIAS,
+                         data=conj_entrenamiento,
+                         method = "glm",
+                         tuneGrid = hiperparametros,
+                         metric="Accuracy",
+                         trControl = control_train, family = "binomial") 
+modelo_logistic
+
+
+#******************************** RANDOM FOREST ******************************************
+#Ajuste de hiperparámetros
+hiperparametros <- expand.grid(mtry = c(3, 4, 5, 7), 
+                               min.node.size = c(2, 3, 4, 5, 10, 15, 20, 30),
+                               splitrule = "gini") 
+set.seed(123) 
+seeds <- vector(mode = "list", length = (particiones * repeticiones) + 1) 
+for (i in 1:(particiones * repeticiones)) { seeds[[i]] <- sample.int(1000, nrow(hiperparametros)) 
+} 
+seeds[[(particiones * repeticiones) + 1]] <- sample.int(1000, 1)
+
+control_train <- trainControl(method = "repeatedcv", number = particiones,
+                              repeats = repeticiones, seeds = seeds,
+                              returnResamp = "final", verboseIter = FALSE,
+                              allowParallel = TRUE)
+#Ajuste del modelo
+set.seed(342)
+modelo_rf <- train(Muerte~NEUMONIA+TIPO_PACIENTE+SECTOR+CLUST_EDAD+CLUST_ENTID+DIABETES+HIPERTENSION+CLUST_DIAS,
+                   data=conj_entrenamiento, 
+                   method = "ranger",
+                   tuneGrid = hiperparametros,
+                   metric = "Accuracy",
+                   trControl = control_train, # Número de árboles ajustados  
+                   num.trees = 1000) 
+modelo_rf
+
+modelo_rf$finalModel
+
+
+ggplot(modelo_rf, highlight = TRUE) + 
+  scale_x_continuous(breaks = 1:30) + 
+  labs(title = "Evolución del accuracy del modelo Random Forest") + 
+  guides(color = guide_legend(title = "mtry"),
+         shape = guide_legend(title = "mtry")) + 
+  theme_bw()
+
+#******************************* COMPARACIÓN DE MODELOS ******************************************************
+
+modelos <- list(arbol = modelo_C50Tree,logistic=modelo_logistic, rf = modelo_rf ) 
+resultados_resamples <- resamples(modelos) 
+resultados_resamples$values %>% head(10) # representa la mejor precisión por modelo, en este caso es de Random Forest
+
+#****** precisión por modelo (por media) ************
+metricas_resamples %>% 
+  group_by(modelo, metrica) %>% 
+  summarise(media = mean(valor)) %>% 
+  spread(key = metrica, value = media) %>% 
+  arrange(desc(Accuracy))
+
+#******Gráfica de las medias por modelo ***************
+metricas_resamples %>% 
+  filter(metrica == "Accuracy") %>% 
+  group_by(modelo) %>% 
+  summarise(media = mean(valor)) %>% 
+  ggplot(aes(x = reorder(modelo, media), y = media, label = round(media, 2))) + 
+  geom_segment(aes(x = reorder(modelo, media), y = 0, 
+                   xend = modelo, yend = media), 
+               color = "grey50") + 
+  geom_point(size = 12, color = "firebrick") + 
+  geom_text(color = "white", size = 3) + 
+  scale_y_continuous(limits = c(0, 1)) + 
+  # Accuracy basal 
+  geom_hline(yintercept = 0.92, linetype = "dashed") + 
+  labs(title = "Validación: Accuracy medio repeated-CV", 
+       subtitle = "Modelos ordenados por media", 
+       x = "modelo") + 
+  coord_flip() + 
+  theme_bw()
+
+#******** BOX PLOR DE ACUERDO A LA PRECISIÓN DE CADA MODELO ********
+metricas_resamples %>% filter(metrica == "Accuracy") %>% 
+  group_by(modelo) %>% 
+  mutate(media = mean(valor)) %>% 
+  ungroup() %>% 
+  ggplot(aes(x = reorder(modelo, media), y = valor, color = modelo)) + 
+  geom_boxplot(alpha = 0.6, outlier.shape = NA) + 
+  geom_jitter(width = 0.1, alpha = 0.6)+
+  scale_y_continuous(limits = c(.89,.925)) + 
+  # Accuracy basal 
+  #geom_hline(yintercept = 0.64, linetype = "dashed") + 
+  #annotate(geom = "text", y = 0.66, x = 4, label = "Accuracy basal") + 
+  theme_bw() + 
+  labs(title = "Validación: Accuracy medio repeated-CV", 
+       subtitle = "Modelos ordenados por media") + 
+  coord_flip() + 
+  theme(legend.position = "none")
+
+#*** Curva Matriz de confusión a traves de modelo logístico
+
+control_train<-trainControl(method="repeatedcv",repeats= 10)
+
+rl.m1<-train(Muerte~NEUMONIA+TIPO_PACIENTE+SECTOR+CLUST_EDAD+CLUST_ENTID+DIABETES+HIPERTENSION+CLUST_DIAS,
+             data=conj_entrenamiento,
+             method='glm',
+             metric="Accuracy",
+             family='binomial',
+             #preProcess=c("center","scale"),
+             trControl=control_train)
+rl.m1
+summary(rl.m1)
+a<-confusionMatrix(rl.m1)  
+a$table
+varImp(rl.m1)
+
+
+#************************************************* MODELO GANADOR = RANDOM FOREST *****************************************************
+#                                            Se hace ahora con el conjunto de Prueba
+
+#Ajuste de hiperparámetros
+hiperparametros <- expand.grid(mtry = c(3, 4, 5, 7), 
+                               min.node.size = c(2, 3, 4, 5, 10, 15, 20, 30),
+                               splitrule = "gini") 
+set.seed(123) 
+seeds <- vector(mode = "list", length = (particiones * repeticiones) + 1) 
+for (i in 1:(particiones * repeticiones)) { seeds[[i]] <- sample.int(1000, nrow(hiperparametros)) 
+} 
+seeds[[(particiones * repeticiones) + 1]] <- sample.int(1000, 1)
+
+control_train <- trainControl(method = "repeatedcv", number = particiones,
+                              repeats = repeticiones, seeds = seeds,
+                              returnResamp = "final", verboseIter = FALSE,
+                              allowParallel = TRUE)
+#Ajuste del modelo
+set.seed(342)
+modelo_rf <- train(Muerte~NEUMONIA+TIPO_PACIENTE+SECTOR+CLUST_EDAD+CLUST_ENTID+DIABETES+HIPERTENSION+CLUST_DIAS,
+                   data=conj_prueba, 
+                   method = "ranger",
+                   tuneGrid = hiperparametros,
+                   metric = "Accuracy",
+                   trControl = control_train, # Número de árboles ajustados  
+                   num.trees = 1000) 
+modelo_rf
+
+modelo_rf$finalModel
+
+confusionMatrix(modelo_rf)
+
+ggplot(modelo_rf, highlight = TRUE) + 
+  scale_x_continuous(breaks = 1:30) + 
+  labs(title = "Evolución del accuracy del modelo Random Forest") + 
+  guides(color = guide_legend(title = "mtry"),
+         shape = guide_legend(title = "mtry")) + 
+  theme_bw()
+
+
+
+#*** CURVA ROC con conjunto de prueba
+predicciones<-predict(object=rl.m1,
+                      newdata=conj_prueba,
+                      type="prob")
+
+curva_roc<-roc(response=conj_prueba$Muerte,
+               predictor=predicciones$`1`)
+
+plot(curva_roc,main="Curva ROC en conjunto de prueba")
+abline(v=1,col="blue")
+abline(v=0,col="blue")
+abline(h=0,col="blue")
+abline(h=1,col="blue")
+
+auc(curva_roc) 
+ci.auc(curva_roc,conf.level=0.95)    
+
